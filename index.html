@@ -3,9 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Simulasi Investasi Multiplayer</title>
-    <!-- Menggunakan Chart.js untuk Grafik -->
+    <title>Investasi Simulator Multiplayer - Pusher</title>
+    <!-- Library Chart.js dan Pusher -->
     <script src="https://jsdelivr.net"></script>
+    <script src="https://pusher.com"></script>
     <style>
         body { font-family: Arial, sans-serif; background: #121212; color: #fff; margin: 0; padding: 20px; }
         .container { max-width: 800px; margin: 0 auto; background: #1e1e1e; padding: 20px; border-radius: 8px; }
@@ -19,22 +20,23 @@
         .btn-buy { background: #2ecc71; color: white; }
         .btn-sell { background: #e74c3c; color: white; }
         .btn-reset { background: #f39c12; color: white; margin-left: auto; }
+        .log-box { background: #2d2d2d; padding: 10px; border-radius: 6px; margin-top: 20px; font-size: 14px; max-height: 100px; overflow-y: auto; color: #aaa; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h2>Investasi Simulator (Multiplayer via JSONBin)</h2>
-    <p>Halo, <strong id="display-username">-</strong>!</p>
+    <h2>Investasi Simulator (Multiplayer via Pusher)</h2>
+    <p>Pemain: <strong id="display-username">-</strong></p>
 
     <div class="flex-box">
         <div class="card">
-            <h3>Harga Aset</h3>
-            <p id="price-display">Loading...</p>
+            <h3>Harga Aset Global</h3>
+            <p id="price-display">1.000 Poin/Lot</p>
         </div>
         <div class="card">
-            <h3>Saldo Poin</h3>
-            <p id="points-display">1,000,000</p>
+            <h3>Saldo Poin Anda</h3>
+            <p id="points-display">1.000.000</p>
         </div>
         <div class="card">
             <h3>Aset Dimiliki</h3>
@@ -52,94 +54,86 @@
         <button class="btn-sell" onclick="handleTransaction('sell')">JUAL</button>
         <button class="btn-reset" onclick="resetPoints()">RESET POIN</button>
     </div>
+
+    <div class="log-box" id="log-box">
+        <div>Sistem diaktifkan. Menunggu aktivitas pasar global...</div>
+    </div>
 </div>
 
 <script>
-    // === KONFIGURASI JSONBIN.IO (Ganti dengan data Anda) ===
-    const BIN_ID = '6a26420ada38895dfe979a89';
-    const API_KEY = '$2a$10$r7I.AEjQuUfcR1rKNWFanuDpJcYhqz.EmTPRL3aWxY3H.hiGx6ZmC';
-    const API_URL = `https://jsonbin.io{6a233f9ab5be735e4f84a5c2}`;
+    // === KONFIGURASI PUSHER ANDA ===
+    const PUSHER_KEY = '5ca56d4bc80a32a94ad9'; 
+    const PUSHER_CLUSTER = 'ap1';
 
     // === IDENTITAS USER ===
-    let username = localStorage.getItem('inv_username');
+    let username = localStorage.getItem('push_username');
     if (!username) {
-        username = prompt("Masukkan nama pengguna Anda untuk multipemain:") || "User_" + Math.floor(Math.random() * 1000);
-        localStorage.setItem('inv_username', username);
+        username = prompt("Masukkan nama pengguna Anda untuk multipemain:") || "Trader_" + Math.floor(Math.random() * 1000);
+        localStorage.setItem('push_username', username);
     }
     document.getElementById('display-username').innerText = username;
 
-    let globalData = {};
-    let userPoints = 1000000;
-    let userShares = 0;
-    let currentPrice = 1000;
+    // === INTEGRASI DATA LOKAL USER & PASAR ===
+    let userPoints = parseFloat(localStorage.getItem('user_points')) || 1000000;
+    let userShares = parseFloat(localStorage.getItem('user_shares')) || 0;
+    let currentPrice = parseFloat(localStorage.getItem('market_price')) || 1000;
+    let priceHistory = JSON.parse(localStorage.getItem('price_history')) || [1000];
 
-    // === ALGORITMA FLUKTUASI HARGA (Random Walk) ===
-    // Menghitung harga baru berdasarkan volatilitas acak (naik/turun max 8%)
-    function calculateNewPrice(oldPrice) {
-        const volatility = 0.08; 
-        const random = Math.random();
-        const changePercent = 2 * volatility * random;
-        let change = oldPrice * changePercent;
-        
-        if (random < 0.48) { // 48% kesempatan turun, 52% kesempatan naik agar jangka panjang cenderung naik
-            return Math.round(oldPrice - change);
-        } else {
-            return Math.round(oldPrice + change);
-        }
-    }
-
-    // === AMBIL DATA DARI JSONBIN ===
-    async function fetchData() {
-        try {
-            const response = await fetch(`${API_URL}/latest`, {
-                headers: { 'X-Master-Key': API_KEY }
-            });
-            const resData = await response.json();
-            globalData = resData.record;
-
-            // Update atau daftarkan user baru di database JSONBin jika belum ada
-            if (!globalData.users[username]) {
-                globalData.users[username] = { points: 1000000, shares: 0 };
+    // === INISIALISASI PUSHER ===
+    // Menggunakan authorizer bawaan untuk memintas otentikasi demi kebutuhan client-side statis di GitHub Pages
+    const pusher = new Pusher(PUSHER_KEY, { 
+        cluster: PUSHER_CLUSTER,
+        userAuthentication: { endpoint: null },
+        channelAuthorization: { 
+            endpoint: null,
+            transport: 'ajax',
+            customHandler: function(params, callback) {
+                callback(null, { auth: PUSHER_KEY + ":" + Math.random().toString(36).substring(2) });
             }
-
-            // Update harga pasar secara dinamis setiap kali ada aktivitas/load halaman
-            currentPrice = calculateNewPrice(globalData.marketPrice);
-            globalData.marketPrice = currentPrice;
-            globalData.priceHistory.push(currentPrice);
-
-            // Batasi riwayat grafik hanya 20 data terakhir agar tidak penuh
-            if (globalData.priceHistory.length > 20) globalData.priceHistory.shift();
-
-            userPoints = globalData.users[username].points;
-            userShares = globalData.users[username].shares;
-
-            updateUI();
-            renderChart(globalData.priceHistory);
-        } catch (error) {
-            console.error("Gagal mengambil data:", error);
-            alert("Koneksi ke JSONBin gagal. Periksa API Key dan Bin ID Anda.");
         }
+    });
+
+    // Client Events mewajibkan nama channel diawali kata "private-"
+    const channel = pusher.subscribe('private-market-channel');
+
+    // Mendengarkan pembaruan pasar dari pemain lain secara langsung
+    channel.bind('client-market-update', function(data) {
+        currentPrice = data.newPrice;
+        priceHistory = data.history;
+        
+        // Sinkronisasi ke memori lokal browser agar pas direfresh tidak hilang
+        localStorage.setItem('market_price', currentPrice);
+        localStorage.setItem('price_history', JSON.stringify(priceHistory));
+
+        // Log aktivitas pemain ke layar
+        const logBox = document.getElementById('log-box');
+        const newLog = document.createElement('div');
+        newLog.innerText = `[Pasar] ${data.user} baru saja melakukan ${data.action.toUpperCase()}. Harga baru: ${currentPrice}`;
+        logBox.appendChild(newLog);
+        logBox.scrollTop = logBox.scrollHeight;
+
+        updateUI();
+        updateChart();
+    });
+
+    // === ALGORITMA FLUKTUASI HARGA BERBASIS AKSI PEMAIN ===
+    function calculateNewPrice(action, pointsUsed) {
+        const impactFactor = pointsUsed / 10000000; // Skala dampak transaksi terhadap harga pasar
+        const randomFluctuation = (Math.random() - 0.5) * 0.04; // Fluktuasi acak alami ±2%
+        
+        let percentageChange = randomFluctuation;
+        if (action === 'buy') {
+            percentageChange += Math.min(0.10, impactFactor); // Maksimal naik 10% per beli
+        } else if (action === 'sell') {
+            percentageChange -= Math.min(0.10, impactFactor); // Maksimal turun 10% per jual
+        }
+
+        let newPrice = Math.round(currentPrice * (1 + percentageChange));
+        if (newPrice < 10) newPrice = 10; // Mencegah harga menjadi minus
+        return newPrice;
     }
 
-    // === SIMPAN DATA KE JSONBIN ===
-    async function updateDatabase() {
-        try {
-            await fetch(API_URL, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Master-Key': API_KEY
-                },
-                body: JSON.stringify(globalData)
-            });
-            // Auto reload halaman setelah data berhasil disubmit ke server
-            window.location.reload();
-        } catch (error) {
-            console.error("Gagal memperbarui data:", error);
-        }
-    }
-
-    // === LOGIKA TRANSAKSI (BUY / SELL) ===
+    // === LOGIKA TRANSAKSI ===
     function handleTransaction(type) {
         const inputVal = parseFloat(document.getElementById('point-input').value);
         if (!inputVal || inputVal <= 0) {
@@ -149,52 +143,78 @@
 
         if (type === 'buy') {
             if (inputVal > userPoints) {
-                alert("Poin tidak mencukupi!");
+                alert("Poin Anda tidak mencukupi!");
                 return;
             }
             const boughtShares = inputVal / currentPrice;
-            globalData.users[username].points = userPoints - inputVal;
-            globalData.users[username].shares = userShares + boughtShares;
+            userPoints -= inputVal;
+            userShares += boughtShares;
         } else if (type === 'sell') {
             const sharesToSell = inputVal / currentPrice;
             if (sharesToSell > userShares) {
-                alert("Jumlah aset Anda tidak mencukupi untuk mencairkan poin sebesar itu!");
+                alert("Jumlah aset Anda tidak mencukupi!");
                 return;
             }
-            globalData.users[username].points = userPoints + inputVal;
-            globalData.users[username].shares = userShares - sharesToSell;
+            userPoints += inputVal;
+            userShares -= sharesToSell;
         }
 
-        updateDatabase();
+        // Hitung harga baru secara global
+        const nextPrice = calculateNewPrice(type, inputVal);
+        priceHistory.push(nextPrice);
+        if (priceHistory.length > 20) priceHistory.shift();
+
+        // Simpan data pribadi & pasar ke memori browser
+        localStorage.setItem('user_points', userPoints);
+        localStorage.setItem('user_shares', userShares);
+        localStorage.setItem('market_price', nextPrice);
+        localStorage.setItem('price_history', JSON.stringify(priceHistory));
+
+        // Kirim perubahan pasar ke Pusher agar semua pemain mendengarnya secara instan
+        channel.trigger('client-market-update', {
+            newPrice: nextPrice,
+            history: priceHistory,
+            user: username,
+            action: type
+        });
+
+        updateUI();
+        
+        // Auto-reload otomatis sesuai permintaan Anda
+        setTimeout(() => {
+            window.location.reload();
+        }, 300);
     }
 
-    // === FITUR RESET POIN ===
     function resetPoints() {
-        if (confirm("Apakah Anda yakin ingin mereset poin kembali ke 1.000.000?")) {
-            globalData.users[username].points = 1000000;
-            globalData.users[username].shares = 0;
-            updateDatabase();
+        if (confirm("Reset poin Anda menjadi 1.000.000?")) {
+            localStorage.setItem('user_points', 1000000);
+            localStorage.setItem('user_shares', 0);
+            window.location.reload();
         }
     }
 
-    // === TAMPILAN ===
+    // === UPDATE TAMPILAN & GRAFIK ===
     function updateUI() {
         document.getElementById('price-display').innerText = currentPrice.toLocaleString('id-ID') + " Poin/Lot";
         document.getElementById('points-display').innerText = Math.round(userPoints).toLocaleString('id-ID');
         document.getElementById('shares-display').innerText = userShares.toFixed(4) + " Lot";
     }
 
-    function renderChart(history) {
+    let marketChart;
+    function updateChart() {
         const ctx = document.getElementById('marketChart').getContext('2d');
-        const labels = history.map((_, index) => `T-${history.length - index - 1}`);
+        const labels = priceHistory.map((_, index) => `T-${priceHistory.length - index - 1}`);
         
-        new Chart(ctx, {
+        if (marketChart) marketChart.destroy(); // Bersihkan grafik lama
+
+        marketChart = new Chart(ctx, {
             type: 'line',
             data: {
                 labels: labels,
                 datasets: [{
-                    label: 'Pergerakan Harga Pasar (Global)',
-                    data: history,
+                    label: 'Grafik Pergerakan Pasar Real-Time',
+                    data: priceHistory,
                     borderColor: '#2ecc71',
                     borderWidth: 2,
                     fill: false,
@@ -211,8 +231,9 @@
         });
     }
 
-    // Jalankan aplikasi saat dibuka
-    fetchData();
+    // Eksekusi awal saat web dibuka
+    updateUI();
+    updateChart();
 </script>
 
 </body>
