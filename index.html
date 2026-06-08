@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulasi Investasi Multiplayer</title>
+    <!-- Menggunakan Chart.js untuk Grafik -->
+    <script src="https://jsdelivr.net"></script>
+    <style>
+        body { font-family: Arial, sans-serif; background: #121212; color: #fff; margin: 0; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; background: #1e1e1e; padding: 20px; border-radius: 8px; }
+        .flex-box { display: flex; justify-content: space-between; margin-bottom: 20px; }
+        .card { background: #2d2d2d; padding: 15px; border-radius: 6px; width: 30%; text-align: center; }
+        .chart-container { margin: 20px 0; background: #2d2d2d; padding: 15px; border-radius: 8px; }
+        .controls { display: flex; gap: 10px; align-items: center; margin-top: 20px; }
+        input, button { padding: 10px; border-radius: 4px; border: none; font-size: 16px; }
+        input { background: #333; color: #fff; flex: 1; }
+        button { cursor: pointer; font-weight: bold; }
+        .btn-buy { background: #2ecc71; color: white; }
+        .btn-sell { background: #e74c3c; color: white; }
+        .btn-reset { background: #f39c12; color: white; margin-left: auto; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Investasi Simulator (Multiplayer via JSONBin)</h2>
+    <p>Halo, <strong id="display-username">-</strong>!</p>
+
+    <div class="flex-box">
+        <div class="card">
+            <h3>Harga Aset</h3>
+            <p id="price-display">Loading...</p>
+        </div>
+        <div class="card">
+            <h3>Saldo Poin</h3>
+            <p id="points-display">1,000,000</p>
+        </div>
+        <div class="card">
+            <h3>Aset Dimiliki</h3>
+            <p id="shares-display">0 Lot</p>
+        </div>
+    </div>
+
+    <div class="chart-container">
+        <canvas id="marketChart"></canvas>
+    </div>
+
+    <div class="controls">
+        <input type="number" id="point-input" placeholder="Masukkan jumlah poin..." min="1">
+        <button class="btn-buy" onclick="handleTransaction('buy')">BELI</button>
+        <button class="btn-sell" onclick="handleTransaction('sell')">JUAL</button>
+        <button class="btn-reset" onclick="resetPoints()">RESET POIN</button>
+    </div>
+</div>
+
+<script>
+    // === KONFIGURASI JSONBIN.IO (Ganti dengan data Anda) ===
+    const BIN_ID = '6a26420ada38895dfe979a89';
+    const API_KEY = '$2a$10$r7I.AEjQuUfcR1rKNWFanuDpJcYhqz.EmTPRL3aWxY3H.hiGx6ZmC';
+    const API_URL = `https://jsonbin.io{6a233f9ab5be735e4f84a5c2}`;
+
+    // === IDENTITAS USER ===
+    let username = localStorage.getItem('inv_username');
+    if (!username) {
+        username = prompt("Masukkan nama pengguna Anda untuk multipemain:") || "User_" + Math.floor(Math.random() * 1000);
+        localStorage.setItem('inv_username', username);
+    }
+    document.getElementById('display-username').innerText = username;
+
+    let globalData = {};
+    let userPoints = 1000000;
+    let userShares = 0;
+    let currentPrice = 1000;
+
+    // === ALGORITMA FLUKTUASI HARGA (Random Walk) ===
+    // Menghitung harga baru berdasarkan volatilitas acak (naik/turun max 8%)
+    function calculateNewPrice(oldPrice) {
+        const volatility = 0.08; 
+        const random = Math.random();
+        const changePercent = 2 * volatility * random;
+        let change = oldPrice * changePercent;
+        
+        if (random < 0.48) { // 48% kesempatan turun, 52% kesempatan naik agar jangka panjang cenderung naik
+            return Math.round(oldPrice - change);
+        } else {
+            return Math.round(oldPrice + change);
+        }
+    }
+
+    // === AMBIL DATA DARI JSONBIN ===
+    async function fetchData() {
+        try {
+            const response = await fetch(`${API_URL}/latest`, {
+                headers: { 'X-Master-Key': API_KEY }
+            });
+            const resData = await response.json();
+            globalData = resData.record;
+
+            // Update atau daftarkan user baru di database JSONBin jika belum ada
+            if (!globalData.users[username]) {
+                globalData.users[username] = { points: 1000000, shares: 0 };
+            }
+
+            // Update harga pasar secara dinamis setiap kali ada aktivitas/load halaman
+            currentPrice = calculateNewPrice(globalData.marketPrice);
+            globalData.marketPrice = currentPrice;
+            globalData.priceHistory.push(currentPrice);
+
+            // Batasi riwayat grafik hanya 20 data terakhir agar tidak penuh
+            if (globalData.priceHistory.length > 20) globalData.priceHistory.shift();
+
+            userPoints = globalData.users[username].points;
+            userShares = globalData.users[username].shares;
+
+            updateUI();
+            renderChart(globalData.priceHistory);
+        } catch (error) {
+            console.error("Gagal mengambil data:", error);
+            alert("Koneksi ke JSONBin gagal. Periksa API Key dan Bin ID Anda.");
+        }
+    }
+
+    // === SIMPAN DATA KE JSONBIN ===
+    async function updateDatabase() {
+        try {
+            await fetch(API_URL, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Master-Key': API_KEY
+                },
+                body: JSON.stringify(globalData)
+            });
+            // Auto reload halaman setelah data berhasil disubmit ke server
+            window.location.reload();
+        } catch (error) {
+            console.error("Gagal memperbarui data:", error);
+        }
+    }
+
+    // === LOGIKA TRANSAKSI (BUY / SELL) ===
+    function handleTransaction(type) {
+        const inputVal = parseFloat(document.getElementById('point-input').value);
+        if (!inputVal || inputVal <= 0) {
+            alert("Masukkan jumlah poin yang valid!");
+            return;
+        }
+
+        if (type === 'buy') {
+            if (inputVal > userPoints) {
+                alert("Poin tidak mencukupi!");
+                return;
+            }
+            const boughtShares = inputVal / currentPrice;
+            globalData.users[username].points = userPoints - inputVal;
+            globalData.users[username].shares = userShares + boughtShares;
+        } else if (type === 'sell') {
+            const sharesToSell = inputVal / currentPrice;
+            if (sharesToSell > userShares) {
+                alert("Jumlah aset Anda tidak mencukupi untuk mencairkan poin sebesar itu!");
+                return;
+            }
+            globalData.users[username].points = userPoints + inputVal;
+            globalData.users[username].shares = userShares - sharesToSell;
+        }
+
+        updateDatabase();
+    }
+
+    // === FITUR RESET POIN ===
+    function resetPoints() {
+        if (confirm("Apakah Anda yakin ingin mereset poin kembali ke 1.000.000?")) {
+            globalData.users[username].points = 1000000;
+            globalData.users[username].shares = 0;
+            updateDatabase();
+        }
+    }
+
+    // === TAMPILAN ===
+    function updateUI() {
+        document.getElementById('price-display').innerText = currentPrice.toLocaleString('id-ID') + " Poin/Lot";
+        document.getElementById('points-display').innerText = Math.round(userPoints).toLocaleString('id-ID');
+        document.getElementById('shares-display').innerText = userShares.toFixed(4) + " Lot";
+    }
+
+    function renderChart(history) {
+        const ctx = document.getElementById('marketChart').getContext('2d');
+        const labels = history.map((_, index) => `T-${history.length - index - 1}`);
+        
+        new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Pergerakan Harga Pasar (Global)',
+                    data: history,
+                    borderColor: '#2ecc71',
+                    borderWidth: 2,
+                    fill: false,
+                    tension: 0.1
+                }]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    y: { grid: { color: '#333' }, ticks: { color: '#fff' } },
+                    x: { grid: { color: '#333' }, ticks: { color: '#fff' } }
+                }
+            }
+        });
+    }
+
+    // Jalankan aplikasi saat dibuka
+    fetchData();
+</script>
+
+</body>
+</html>
