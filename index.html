@@ -3,10 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Investasi Simulator Multiplayer - Pusher</title>
-    <!-- Library Chart.js dan Pusher -->
+    <title>Investasi Simulator Multiplayer - Ably</title>
+    <!-- Memuat Library Terverifikasi -->
     <script src="https://jsdelivr.net"></script>
-    <script src="https://pusher.com"></script>
+    <script src="https://ably.com"></script>
     <style>
         body { font-family: Arial, sans-serif; background: #121212; color: #fff; margin: 0; padding: 20px; }
         .container { max-width: 800px; margin: 0 auto; background: #1e1e1e; padding: 20px; border-radius: 8px; }
@@ -26,13 +26,13 @@
 <body>
 
 <div class="container">
-    <h2>Investasi Simulator (Multiplayer via Pusher)</h2>
+    <h2>Investasi Simulator (Multiplayer via Ably)</h2>
     <p>Pemain: <strong id="display-username">-</strong></p>
 
     <div class="flex-box">
         <div class="card">
-            <h3>Harga Aset Global</h3>
-            <p id="price-display">1.000 Poin/Lot</p>
+            <h3>Harga Pasar Global</h3>
+            <p id="price-display">Loading...</p>
         </div>
         <div class="card">
             <h3>Saldo Poin Anda</h3>
@@ -52,63 +52,63 @@
         <input type="number" id="point-input" placeholder="Masukkan jumlah poin..." min="1">
         <button class="btn-buy" onclick="handleTransaction('buy')">BELI</button>
         <button class="btn-sell" onclick="handleTransaction('sell')">JUAL</button>
-        <button class="btn-reset" onclick="resetPoints()">RESET POIN</button>
+        <button class="btn-reset" onclick="resetPoints()">RESET GAME</button>
     </div>
 
     <div class="log-box" id="log-box">
-        <div>Sistem diaktifkan. Menunggu aktivitas pasar global...</div>
+        <div>Sistem diaktifkan. Sinkronisasi dengan pasar awan...</div>
     </div>
 </div>
 
 <script>
-    // === KONFIGURASI PUSHER ANDA ===
-    const PUSHER_KEY = '5ca56d4bc80a32a94ad9'; 
-    const PUSHER_CLUSTER = 'ap1';
+    // === KONFIGURASI ABLY CHANNELS ROOT ===
+    const ABLY_API_KEY = 'zpRGCw.yfkaJA:CFtNgfcPFALqLqx8QYqebNCZs3hDHh7_moQjC2l4YpI'; 
 
     // === IDENTITAS USER ===
-    let username = localStorage.getItem('push_username');
+    let username = localStorage.getItem('ably_username');
     if (!username) {
         username = prompt("Masukkan nama pengguna Anda untuk multipemain:") || "Trader_" + Math.floor(Math.random() * 1000);
-        localStorage.setItem('push_username', username);
+        localStorage.setItem('ably_username', username);
     }
     document.getElementById('display-username').innerText = username;
 
-    // === INTEGRASI DATA LOKAL USER & PASAR ===
-    let userPoints = parseFloat(localStorage.getItem('user_points')) || 1000000;
+    // === INISIALISASI DATA DOMPET LOKAL ===
+    let userPoints = parseFloat(localStorage.getItem('user_points'));
+    if (isNaN(userPoints) || userPoints === null) userPoints = 1000000;
     let userShares = parseFloat(localStorage.getItem('user_shares')) || 0;
-    let currentPrice = parseFloat(localStorage.getItem('market_price')) || 1000;
-    let priceHistory = JSON.parse(localStorage.getItem('price_history')) || [1000];
+    
+    // Default fallback jika belum ada data pasar di awan
+    let currentPrice = 1000;
+    let priceHistory = [1000];
+    let marketChart = null;
 
-    // === INISIALISASI PUSHER ===
-    // Menggunakan authorizer bawaan untuk memintas otentikasi demi kebutuhan client-side statis di GitHub Pages
-    const pusher = new Pusher(PUSHER_KEY, { 
-        cluster: PUSHER_CLUSTER,
-        userAuthentication: { endpoint: null },
-        channelAuthorization: { 
-            endpoint: null,
-            transport: 'ajax',
-            customHandler: function(params, callback) {
-                callback(null, { auth: PUSHER_KEY + ":" + Math.random().toString(36).substring(2) });
-            }
+    // === KONEKSI KLIEN ABLY REALTIME ===
+    const ably = new Ably.Realtime({ key: ABLY_API_KEY });
+    const channel = ably.channels.get('investasi-pasar-global', { params: { rewind: '1' } }); // Rewind mengambil data terakhir saat refresh
+
+    // Ambil histori pesan terakhir dari server Ably agar grafik tidak hilang/kosong saat di-refresh
+    channel.history(function(err, page) {
+        if (!err && page.items.length > 0) {
+            const data = page.items[0].data;
+            currentPrice = data.newPrice;
+            priceHistory = data.history;
         }
+        updateUI();
+        updateChart();
     });
 
-    // Client Events mewajibkan nama channel diawali kata "private-"
-    const channel = pusher.subscribe('private-market-channel');
-
-    // Mendengarkan pembaruan pasar dari pemain lain secara langsung
-    channel.bind('client-market-update', function(data) {
+    // Mendengarkan siaran transaksi dari pemain lain di internet secara live
+    channel.subscribe('market-update', function(message) {
+        const data = message.data;
+        
+        // Ambil data baru dari internet
         currentPrice = data.newPrice;
         priceHistory = data.history;
-        
-        // Sinkronisasi ke memori lokal browser agar pas direfresh tidak hilang
-        localStorage.setItem('market_price', currentPrice);
-        localStorage.setItem('price_history', JSON.stringify(priceHistory));
 
-        // Log aktivitas pemain ke layar
+        // Cetak aktivitas pemain lain ke kotak log
         const logBox = document.getElementById('log-box');
         const newLog = document.createElement('div');
-        newLog.innerText = `[Pasar] ${data.user} baru saja melakukan ${data.action.toUpperCase()}. Harga baru: ${currentPrice}`;
+        newLog.innerText = `[Pasar] ${data.user} melakukan ${data.action.toUpperCase()} sebesar ${data.points.toLocaleString('id-ID')} poin. Harga baru: ${currentPrice}`;
         logBox.appendChild(newLog);
         logBox.scrollTop = logBox.scrollHeight;
 
@@ -116,27 +116,27 @@
         updateChart();
     });
 
-    // === ALGORITMA FLUKTUASI HARGA BERBASIS AKSI PEMAIN ===
+    // === ALGORITMA FLUKTUASI HARGA INVESTASI ===
     function calculateNewPrice(action, pointsUsed) {
-        const impactFactor = pointsUsed / 10000000; // Skala dampak transaksi terhadap harga pasar
-        const randomFluctuation = (Math.random() - 0.5) * 0.04; // Fluktuasi acak alami ±2%
+        const impactFactor = pointsUsed / 5000000; 
+        const randomFluctuation = (Math.random() - 0.5) * 0.05; // Sentimen acak ±2.5%
         
         let percentageChange = randomFluctuation;
         if (action === 'buy') {
-            percentageChange += Math.min(0.10, impactFactor); // Maksimal naik 10% per beli
+            percentageChange += Math.min(0.12, impactFactor); // Maksimal naik 12% per pembelian
         } else if (action === 'sell') {
-            percentageChange -= Math.min(0.10, impactFactor); // Maksimal turun 10% per jual
+            percentageChange -= Math.min(0.12, impactFactor); // Maksimal turun 12% per penjualan
         }
 
         let newPrice = Math.round(currentPrice * (1 + percentageChange));
-        if (newPrice < 10) newPrice = 10; // Mencegah harga menjadi minus
+        if (newPrice < 10) newPrice = 10; // Batas bawah harga agar tidak 0
         return newPrice;
     }
 
-    // === LOGIKA TRANSAKSI ===
+    // === LOGIKA TRANSAKSI (BUY / SELL) ===
     function handleTransaction(type) {
         const inputVal = parseFloat(document.getElementById('point-input').value);
-        if (!inputVal || inputVal <= 0) {
+        if (isNaN(inputVal) || inputVal <= 0) {
             alert("Masukkan jumlah poin yang valid!");
             return;
         }
@@ -152,73 +152,70 @@
         } else if (type === 'sell') {
             const sharesToSell = inputVal / currentPrice;
             if (sharesToSell > userShares) {
-                alert("Jumlah aset Anda tidak mencukupi!");
+                alert("Jumlah kepemilikan aset Anda tidak mencukupi!");
                 return;
             }
             userPoints += inputVal;
             userShares -= sharesToSell;
         }
 
-        // Hitung harga baru secara global
+        // Hitung pergerakan harga global pasca transaksi
         const nextPrice = calculateNewPrice(type, inputVal);
         priceHistory.push(nextPrice);
         if (priceHistory.length > 20) priceHistory.shift();
 
-        // Simpan data pribadi & pasar ke memori browser
+        // Simpan data dompet pribadi saja ke memori browser
         localStorage.setItem('user_points', userPoints);
         localStorage.setItem('user_shares', userShares);
-        localStorage.setItem('market_price', nextPrice);
-        localStorage.setItem('price_history', JSON.stringify(priceHistory));
 
-        // Kirim perubahan pasar ke Pusher agar semua pemain mendengarnya secara instan
-        channel.trigger('client-market-update', {
+        // Siarkan data ke awan Ably agar semua pemain menerima update harga pasar
+        channel.publish('market-update', {
             newPrice: nextPrice,
             history: priceHistory,
             user: username,
-            action: type
+            action: type,
+            points: inputVal
         });
 
         updateUI();
-        
-        // Auto-reload otomatis sesuai permintaan Anda
+
+        // Delay singkat 400ms agar paket data terkirim penuh ke server Ably sebelum auto-reload dipicu
         setTimeout(() => {
             window.location.reload();
-        }, 300);
+        }, 400);
     }
 
     function resetPoints() {
-        if (confirm("Reset poin Anda menjadi 1.000.000?")) {
-            localStorage.setItem('user_points', 1000000);
-            localStorage.setItem('user_shares', 0);
+        if (confirm("Reset seluruh data game dan poin Anda kembali ke 1.000.000?")) {
+            localStorage.clear();
             window.location.reload();
         }
     }
 
-    // === UPDATE TAMPILAN & GRAFIK ===
+    // === RE-RENDER UI & GRAFIK ===
     function updateUI() {
         document.getElementById('price-display').innerText = currentPrice.toLocaleString('id-ID') + " Poin/Lot";
         document.getElementById('points-display').innerText = Math.round(userPoints).toLocaleString('id-ID');
         document.getElementById('shares-display').innerText = userShares.toFixed(4) + " Lot";
     }
 
-    let marketChart;
     function updateChart() {
         const ctx = document.getElementById('marketChart').getContext('2d');
         const labels = priceHistory.map((_, index) => `T-${priceHistory.length - index - 1}`);
         
-        if (marketChart) marketChart.destroy(); // Bersihkan grafik lama
+        if (marketChart) marketChart.destroy(); // Menghapus instansi grafik lama untuk mencegah penumpukan memori
 
         marketChart = new Chart(ctx, {
             type: 'line',
             data: {
                 labels: labels,
                 datasets: [{
-                    label: 'Grafik Pergerakan Pasar Real-Time',
+                    label: 'Pergerakan Harga Pasar Saham Real-Time',
                     data: priceHistory,
                     borderColor: '#2ecc71',
                     borderWidth: 2,
                     fill: false,
-                    tension: 0.1
+                    tension: 0.15
                 }]
             },
             options: {
@@ -230,11 +227,8 @@
             }
         });
     }
-
-    // Eksekusi awal saat web dibuka
-    updateUI();
-    updateChart();
 </script>
 
 </body>
 </html>
+
